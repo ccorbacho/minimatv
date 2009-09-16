@@ -50,8 +50,8 @@ class TVGuide(QtGui.QMainWindow):
             self._channel_list,
             QtCore.SIGNAL("cellDoubleClicked(int, int)"),
             self._switch_channel)
-        splitter.addWidget(self._channel_list)
         splitter.addWidget(self._schedule_table)
+        splitter.addWidget(self._channel_list)
         self.setCentralWidget(splitter)
 
     def get_tv_xml(self):
