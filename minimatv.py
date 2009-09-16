@@ -26,13 +26,135 @@ from PyQt4 import QtGui
 from PyQt4 import QtXmlPatterns
 
 
+class ScheduleItem(object):
+
+    def __init__(self, start=None, title=None, duration=None, channel=None):
+        self.start = start
+        self.title = title
+        self.duration = duration
+        self.channel = channel
+
+
+class ScheduleModel(QtCore.QAbstractTableModel):
+
+    START, TITLE, DURATION, CHANNEL = range(4)
+
+    ATTRIBUTE_MAP = {
+        START: "start",
+        TITLE: "title",
+        DURATION: "duration",
+        CHANNEL: "channel"}
+
+    def __init__(self, parent=None):
+        super(ScheduleModel, self).__init__(parent)
+        self._items = []
+
+    def data(self, index, role=QtCore.Qt.DisplayRole):
+        if role == QtCore.Qt.TextAlignmentRole:
+            return QtCore.QVariant(int(QtCore.Qt.AlignTop))
+        if (not index.isValid() or
+            not (0 <= index.row() < len(self._items))):
+                return QtCore.QVariant()
+        schedule_item = self._items[index.row()]
+        column = index.column()
+        if role == QtCore.Qt.DisplayRole:
+            return QtCore.QVariant(
+                getattr(schedule_item, self.ATTRIBUTE_MAP[column]))
+        return QtCore.QVariant()
+
+    def headerData(self, section, orientation, role=QtCore.Qt.DisplayRole):
+        if role == QtCore.Qt.TextAlignmentRole:
+            if orientation == QtCore.Qt.Horizontal:
+                return QtCore.QVariant(
+                    int(QtCore.Qt.AlignLeft|QtCore.Qt.AlignVCenter))
+            return QtCore.QVariant(
+                int(QtCore.Qt.AlignLeft|QtCore.Qt.AlignVCenter))
+        if role != QtCore.Qt.DisplayRole:
+            return QtCore.QVariant()
+        if orientation == QtCore.Qt.Horizontal:
+            return QtCore.QVariant(self.ATTRIBUTE_MAP[section].capitalize())
+        return QtCore.QVariant(int(section + 1))
+
+    def rowCount(self, index=QtCore.QModelIndex()):
+        return len(self._items)
+
+    def columnCount(self, index=QtCore.QModelIndex()):
+        return 4
+
+    def setData(self, index, value, role=QtCore.Qt.EditRole):
+        if index.isValid() and 0 <= index.row() < len(self._items):
+            column = index.column()
+            # TODO - is this going to start passing QString to value?
+            setattr(self._items[index.row()], self.ATTRIBUTE_MAP[column], value)
+            self.emit(
+                QtCore.SIGNAL(
+                    "dataChanged(const QModelIndex &, const QModelIndex &)"),
+                index, index)
+            return True
+
+    def insertRows(self, position, rows=1, index=QtCore.QModelIndex()):
+        self.beginInsertRows(
+            QtCore.QModelIndex(), position, position + rows - 1)
+        for row in range(rows):
+            self._items.insert(position + row, ScheduleItem())
+        self.endInsertRows()
+
+    def removeRows(self):
+        # Ho hum... do I even need to care?
+        raise NotImplementedError()
+
+    def clear(self):
+        raise NotImplementedError()
+
+
 class TVGuide(QtGui.QMainWindow):
 
     def __init__(self, parent=None):
         super(TVGuide, self).__init__(parent)
         self._tv_xml = None
+        self.setup_models()
         self.setup_widgets()
         self._populate_channel_list()
+
+    def setup_models(self):
+        self._schedule_model = ScheduleModel()
+        # TODO - this is slow - maybe stick this in a seperate thread?
+        self._populate_schedule_list()
+
+    def _populate_schedule_list(self):
+        now = datetime.datetime.utcnow()
+        today = datetime.date.today()
+        programmes = self.get_tv_xml().findall("programme")
+        for programme in programmes:
+            title = programme.find("title").text
+            channel = programme.get("channel")
+            stop = programme.get("stop")
+            stop_time = self._utc_from_timestamp(stop)
+            if stop_time < now:
+                continue
+            start = programme.get("start")
+            start_time = self._utc_from_timestamp(start)
+            row = self._schedule_model.rowCount()
+            duration = stop_time - start_time
+            self._schedule_model.insertRows(row)
+            # TODO - convert this to local time... somehow
+            self._schedule_model.setData(
+                self._schedule_model.index(
+                    row, self._schedule_model.START),
+                start_time.strftime("%H:%M"))
+            self._schedule_model.setData(
+                self._schedule_model.index(
+                    row, self._schedule_model.TITLE),
+                title)
+            self._schedule_model.setData(
+                self._schedule_model.index(
+                    row, self._schedule_model.DURATION),
+                duration)
+            # TODO - handle pretty channel names
+            self._schedule_model.setData(
+                self._schedule_model.index(
+                    row, self._schedule_model.CHANNEL),
+                channel)
 
     def setup_widgets(self):
         hbox = QtGui.QHBoxLayout()
@@ -42,14 +164,8 @@ class TVGuide(QtGui.QMainWindow):
         self._channel_list.setColumnHidden(0, True)
         self._channel_list.horizontalHeader().setVisible(False)
         self._channel_list.verticalHeader().setVisible(False)
-        self._schedule_table = QtGui.QTableWidget()
-        self._schedule_table.setColumnCount(4)
-        self._schedule_table.setHorizontalHeaderLabels([
-                "Time", "Show", "Duration", "Channel"])
-        self.connect(
-            self._channel_list,
-            QtCore.SIGNAL("cellDoubleClicked(int, int)"),
-            self._switch_channel)
+        self._schedule_table = QtGui.QTableView()
+        self._schedule_table.setModel(self._schedule_model)
         splitter.addWidget(self._schedule_table)
         splitter.addWidget(self._channel_list)
         self.setCentralWidget(splitter)
@@ -86,40 +202,6 @@ class TVGuide(QtGui.QMainWindow):
         timestamp, offset = full_timestamp.split(" ")
         dt = datetime.datetime.strptime(timestamp, "%Y%m%d%H%M%S")
         return dt - self._delta_from_offset(offset)
-
-    def _switch_channel(self, row, column):
-        channel = unicode(self._channel_list.item(row, 0).text())
-        pretty_channel = unicode(self._channel_list.item(row, 1).text())
-        programmes = self.get_tv_xml().xpath(
-            "//programme[@channel='%s']" % channel)
-        self._schedule_table.clear()
-        # Erm... why?
-        self._schedule_table.setHorizontalHeaderLabels([
-                "Time", "Show", "Duration", "Channel"])
-        now = datetime.datetime.utcnow()
-        today = datetime.date.today()
-        for programme in programmes:
-            title = programme.find("title").text
-            stop = programme.get("stop")
-            stop_time = self._utc_from_timestamp(stop)
-            if stop_time < now:
-                continue
-            start = programme.get("start")
-            start_time = self._utc_from_timestamp(start)
-            row = self._schedule_table.rowCount()
-            duration = stop_time - start_time
-            self._schedule_table.insertRow(row)
-            # TODO - convert this to local time... somehow
-            self._schedule_table.setItem(
-                row, 0, QtGui.QTableWidgetItem(start_time.strftime("%H:%M")))
-            self._schedule_table.setItem(
-                row, 1, QtGui.QTableWidgetItem(title))
-            self._schedule_table.setItem(
-                row, 2, QtGui.QTableWidgetItem(str(duration)))
-            self._schedule_table.setItem(
-                row, 3, QtGui.QTableWidgetItem(pretty_channel))
-        self._schedule_table.sortItems(1)
-        self._schedule_table.resizeColumnsToContents()
 
 
 def main():
