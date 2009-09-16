@@ -36,8 +36,7 @@ class TVGuide(QtGui.QMainWindow):
 
     def setup_widgets(self):
         hbox = QtGui.QHBoxLayout()
-        layout_widget = QtGui.QWidget()
-        layout_widget.setLayout(hbox)
+        splitter = QtGui.QSplitter(QtCore.Qt.Horizontal)
         self._channel_list = QtGui.QTableWidget()
         self._channel_list.setColumnCount(2)
         self._channel_list.setColumnHidden(0, True)
@@ -51,9 +50,9 @@ class TVGuide(QtGui.QMainWindow):
             self._channel_list,
             QtCore.SIGNAL("cellDoubleClicked(int, int)"),
             self._switch_channel)
-        hbox.addWidget(self._channel_list)
-        hbox.addWidget(self._schedule_table)
-        self.setCentralWidget(layout_widget)
+        splitter.addWidget(self._channel_list)
+        splitter.addWidget(self._schedule_table)
+        self.setCentralWidget(splitter)
 
     def get_tv_xml(self):
         if self._tv_xml is None:
