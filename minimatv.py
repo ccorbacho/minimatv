@@ -37,9 +37,13 @@ class ScheduleItem(object):
 
 class ScheduleModel(QtCore.QAbstractTableModel):
 
-    START, TITLE, DURATION, CHANNEL = range(4)
+    COLUMN_COUNT = 5
 
+    RAW_START, START, TITLE, DURATION, CHANNEL = range(COLUMN_COUNT)
+
+    # TODO - replace with a function?
     ATTRIBUTE_MAP = {
+        RAW_START: "raw_start",
         START: "start",
         TITLE: "title",
         DURATION: "duration",
@@ -79,7 +83,7 @@ class ScheduleModel(QtCore.QAbstractTableModel):
         return len(self._items)
 
     def columnCount(self, index=QtCore.QModelIndex()):
-        return 4
+        return self.COLUMN_COUNT
 
     def setData(self, index, value, role=QtCore.Qt.EditRole):
         if index.isValid() and 0 <= index.row() < len(self._items):
@@ -94,14 +98,19 @@ class ScheduleModel(QtCore.QAbstractTableModel):
 
     def insertRows(self, position, rows=1, index=QtCore.QModelIndex()):
         self.beginInsertRows(
-            QtCore.QModelIndex(), position, position + rows - 1)
+             QtCore.QModelIndex(), position, position + rows - 1)
         for row in range(rows):
             self._items.insert(position + row, ScheduleItem())
         self.endInsertRows()
+        return True
 
-    def removeRows(self):
-        # Ho hum... do I even need to care?
-        raise NotImplementedError()
+    def removeRows(self, position, rows=1, index=QtCore.QModelIndex()):
+        self.beginInsertRows(
+             QtCore.QModelIndex(), position, position + rows - 1)
+        for row in range(rows):
+            self._items.remove(position)
+        self.endInsertRows()
+        return True
 
     def clear(self):
         raise NotImplementedError()
@@ -112,6 +121,7 @@ class TVGuide(QtGui.QMainWindow):
     def __init__(self, parent=None):
         super(TVGuide, self).__init__(parent)
         self._tv_xml = None
+        self._pretty_channels = {}
         self.setup_models()
         self.setup_widgets()
         self._populate_channel_list()
@@ -138,6 +148,11 @@ class TVGuide(QtGui.QMainWindow):
             duration = stop_time - start_time
             self._schedule_model.insertRows(row)
             # TODO - convert this to local time... somehow
+            raw_start = time.mktime(start_time.timetuple()) + 1e-6 * start_time.microsecond
+            self._schedule_model.setData(
+                self._schedule_model.index(
+                    row, self._schedule_model.RAW_START),
+                str(start_time))
             self._schedule_model.setData(
                 self._schedule_model.index(
                     row, self._schedule_model.START),
@@ -154,7 +169,8 @@ class TVGuide(QtGui.QMainWindow):
             self._schedule_model.setData(
                 self._schedule_model.index(
                     row, self._schedule_model.CHANNEL),
-                channel)
+                self.get_pretty_name_for_channel(channel))
+        self._schedule_model.sort(ScheduleModel.RAW_START)
 
     def setup_widgets(self):
         hbox = QtGui.QHBoxLayout()
@@ -166,6 +182,7 @@ class TVGuide(QtGui.QMainWindow):
         self._channel_list.verticalHeader().setVisible(False)
         self._schedule_table = QtGui.QTableView()
         self._schedule_table.setModel(self._schedule_model)
+        self._schedule_table.resizeRowsToContents()
         splitter.addWidget(self._schedule_table)
         splitter.addWidget(self._channel_list)
         self.setCentralWidget(splitter)
@@ -174,6 +191,15 @@ class TVGuide(QtGui.QMainWindow):
         if self._tv_xml is None:
             self._tv_xml = lxml.etree.parse("tv.xml").getroot()
         return self._tv_xml
+
+    def get_pretty_name_for_channel(self, channel_id):
+        if channel_id not in self._pretty_channels:
+        # TODO - cache this lookup
+            channels = self.get_tv_xml().xpath("//channel[@id='%s']" % channel_id)
+            assert len(channels) == 1
+            channel = channels[0]
+            self._pretty_channels[channel_id] = channel.find("display-name").text
+        return self._pretty_channels[channel_id]
 
     def _populate_channel_list(self):
         channels = self.get_tv_xml().findall("channel")
@@ -187,6 +213,7 @@ class TVGuide(QtGui.QMainWindow):
             self._channel_list.setItem(
                 row,
                 1, QtGui.QTableWidgetItem(channel_name))
+        self._channel_list.resizeRowsToContents()
 
     def _delta_from_offset(self, offset):
         # Yes, Martha, apparently there really is no simple way to
