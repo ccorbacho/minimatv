@@ -28,9 +28,9 @@ from PyQt4 import QtXmlPatterns
 
 class ScheduleItem(object):
 
-    def __init__(self, start=None, title=None, duration=None, channel=None):
-        self.start = start
-        self.title = title
+    def __init__(self, date=None, show=None, duration=None, channel=None):
+        self.date = date
+        self.show = show
         self.duration = duration
         self.channel = channel
 
@@ -39,15 +39,16 @@ class ScheduleModel(QtCore.QAbstractTableModel):
 
     COLUMN_COUNT = 5
 
-    RAW_START, START, TITLE, DURATION, CHANNEL = range(COLUMN_COUNT)
+    RAW_START, DATE, SHOW, DURATION, CHANNEL = range(COLUMN_COUNT)
 
     # TODO - replace with a function?
     ATTRIBUTE_MAP = {
         RAW_START: "raw_start",
-        START: "start",
-        TITLE: "title",
+        DATE: "date",
+        SHOW: "show",
         DURATION: "duration",
-        CHANNEL: "channel"}
+        CHANNEL: "channel",
+        }
 
     def __init__(self, parent=None):
         super(ScheduleModel, self).__init__(parent)
@@ -155,11 +156,11 @@ class TVGuide(QtGui.QMainWindow):
                 str(start_time))
             self._schedule_model.setData(
                 self._schedule_model.index(
-                    row, self._schedule_model.START),
+                    row, self._schedule_model.DATE),
                 start_time.strftime("%H:%M"))
             self._schedule_model.setData(
                 self._schedule_model.index(
-                    row, self._schedule_model.TITLE),
+                    row, self._schedule_model.SHOW),
                 title)
             self._schedule_model.setData(
                 self._schedule_model.index(
@@ -180,11 +181,15 @@ class TVGuide(QtGui.QMainWindow):
         self._channel_list.setColumnHidden(0, True)
         self._channel_list.horizontalHeader().setVisible(False)
         self._channel_list.verticalHeader().setVisible(False)
+        self._channel_tab = QtGui.QTabWidget()
         self._schedule_table = QtGui.QTableView()
         self._schedule_table.setModel(self._schedule_model)
         self._schedule_table.resizeRowsToContents()
+        self._show_list = QtGui.QTableWidget()
+        self._channel_tab.insertTab(0, self._channel_list, "Filters")
+        self._channel_tab.insertTab(1, self._show_list, "Lists")
         splitter.addWidget(self._schedule_table)
-        splitter.addWidget(self._channel_list)
+        splitter.addWidget(self._channel_tab)
         self.setCentralWidget(splitter)
 
     def get_tv_xml(self):
