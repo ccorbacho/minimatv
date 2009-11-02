@@ -23,98 +23,7 @@ import lxml.etree
 
 from PyQt4 import QtCore
 from PyQt4 import QtGui
-from PyQt4 import QtXmlPatterns
-
-
-class ScheduleItem(object):
-
-    def __init__(self, date=None, show=None, duration=None, channel=None):
-        self.date = date
-        self.show = show
-        self.duration = duration
-        self.channel = channel
-
-
-class ScheduleModel(QtCore.QAbstractTableModel):
-
-    COLUMN_COUNT = 5
-
-    RAW_START, DATE, SHOW, DURATION, CHANNEL = range(COLUMN_COUNT)
-
-    # TODO - replace with a function?
-    ATTRIBUTE_MAP = {
-        RAW_START: "raw_start",
-        DATE: "date",
-        SHOW: "show",
-        DURATION: "duration",
-        CHANNEL: "channel",
-        }
-
-    def __init__(self, parent=None):
-        super(ScheduleModel, self).__init__(parent)
-        self._items = []
-
-    def data(self, index, role=QtCore.Qt.DisplayRole):
-        if role == QtCore.Qt.TextAlignmentRole:
-            return QtCore.QVariant(int(QtCore.Qt.AlignTop))
-        if (not index.isValid() or
-            not (0 <= index.row() < len(self._items))):
-                return QtCore.QVariant()
-        schedule_item = self._items[index.row()]
-        column = index.column()
-        if role == QtCore.Qt.DisplayRole:
-            return QtCore.QVariant(
-                getattr(schedule_item, self.ATTRIBUTE_MAP[column]))
-        return QtCore.QVariant()
-
-    def headerData(self, section, orientation, role=QtCore.Qt.DisplayRole):
-        if role == QtCore.Qt.TextAlignmentRole:
-            if orientation == QtCore.Qt.Horizontal:
-                return QtCore.QVariant(
-                    int(QtCore.Qt.AlignLeft|QtCore.Qt.AlignVCenter))
-            return QtCore.QVariant(
-                int(QtCore.Qt.AlignLeft|QtCore.Qt.AlignVCenter))
-        if role != QtCore.Qt.DisplayRole:
-            return QtCore.QVariant()
-        if orientation == QtCore.Qt.Horizontal:
-            return QtCore.QVariant(self.ATTRIBUTE_MAP[section].capitalize())
-        return QtCore.QVariant(int(section + 1))
-
-    def rowCount(self, index=QtCore.QModelIndex()):
-        return len(self._items)
-
-    def columnCount(self, index=QtCore.QModelIndex()):
-        return self.COLUMN_COUNT
-
-    def setData(self, index, value, role=QtCore.Qt.EditRole):
-        if index.isValid() and 0 <= index.row() < len(self._items):
-            column = index.column()
-            # TODO - is this going to start passing QString to value?
-            setattr(self._items[index.row()], self.ATTRIBUTE_MAP[column], value)
-            self.emit(
-                QtCore.SIGNAL(
-                    "dataChanged(const QModelIndex &, const QModelIndex &)"),
-                index, index)
-            return True
-
-    def insertRows(self, position, rows=1, index=QtCore.QModelIndex()):
-        self.beginInsertRows(
-             QtCore.QModelIndex(), position, position + rows - 1)
-        for row in range(rows):
-            self._items.insert(position + row, ScheduleItem())
-        self.endInsertRows()
-        return True
-
-    def removeRows(self, position, rows=1, index=QtCore.QModelIndex()):
-        self.beginInsertRows(
-             QtCore.QModelIndex(), position, position + rows - 1)
-        for row in range(rows):
-            self._items.remove(position)
-        self.endInsertRows()
-        return True
-
-    def clear(self):
-        raise NotImplementedError()
+from PyQt4 import QtSql
 
 
 class TVGuide(QtGui.QMainWindow):
@@ -128,14 +37,40 @@ class TVGuide(QtGui.QMainWindow):
         self._populate_channel_list()
 
     def setup_models(self):
-        self._schedule_model = ScheduleModel()
-        # TODO - this is slow - maybe stick this in a seperate thread?
-        self._populate_schedule_list()
+        self._db = QtSql.QSqlDatabase("QSQLITE")
+        self._db.setDatabaseName("minimatv.db")
+        if not self._db.open():
+            # TODO - better exception for failing to open database
+            print self._db.lastError().text()
+            sys.exit(1)
+        self._populate_schedule_database() # TODO - don't call this on startup
+        self._schedule_model = QtSql.QSqlTableModel(self, self._db)
+        self._schedule_model.setTable("programmes")
+        self._schedule_model.setSort(1, QtCore.Qt.AscendingOrder)
+        self._schedule_model.select()
+        self._schedule_model.removeColumn(0)
+        self._schedule_model.removeColumn(1)
+        self._schedule_model.setHeaderData(0, QtCore.Qt.Horizontal, "Time")
+        self._schedule_model.setHeaderData(1, QtCore.Qt.Horizontal, "Show")
+        self._schedule_model.setHeaderData(2, QtCore.Qt.Horizontal, "Duration")
+        self._schedule_model.setHeaderData(3, QtCore.Qt.Horizontal, "Channel")
 
-    def _populate_schedule_list(self):
-        now = datetime.datetime.utcnow()
-        today = datetime.date.today()
+    def _populate_schedule_database(self):
+        query = QtSql.QSqlQuery(self._db)
+        query.exec_("""\
+CREATE TABLE programmes (
+id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
+start VARCHAR(19) NOT NULL,
+stop VARCHAR(19) NOT NULL,
+title VARCHAR(200) NOT NULL,
+duration VARCHAR(6) NOT NULL,
+channel VARCHAR(40) NOT NULL)
+""")
+        query.prepare("""\
+INSERT INTO programmes (start, stop, title, duration, channel)
+VALUES (:start, :stop, :title, :duration, :channel)""")
         programmes = self.get_tv_xml().findall("programme")
+        now = datetime.datetime.utcnow()
         for programme in programmes:
             title = programme.find("title").text
             channel = programme.get("channel")
@@ -145,33 +80,17 @@ class TVGuide(QtGui.QMainWindow):
                 continue
             start = programme.get("start")
             start_time = self._utc_from_timestamp(start)
-            row = self._schedule_model.rowCount()
             duration = stop_time - start_time
-            self._schedule_model.insertRows(row)
-            # TODO - convert this to local time... somehow
-            raw_start = time.mktime(start_time.timetuple()) + 1e-6 * start_time.microsecond
-            self._schedule_model.setData(
-                self._schedule_model.index(
-                    row, self._schedule_model.RAW_START),
-                str(start_time))
-            self._schedule_model.setData(
-                self._schedule_model.index(
-                    row, self._schedule_model.DATE),
-                start_time.strftime("%H:%M"))
-            self._schedule_model.setData(
-                self._schedule_model.index(
-                    row, self._schedule_model.SHOW),
-                title)
-            self._schedule_model.setData(
-                self._schedule_model.index(
-                    row, self._schedule_model.DURATION),
-                duration)
-            # TODO - handle pretty channel names
-            self._schedule_model.setData(
-                self._schedule_model.index(
-                    row, self._schedule_model.CHANNEL),
-                self.get_pretty_name_for_channel(channel))
-        self._schedule_model.sort(ScheduleModel.RAW_START)
+            query.bindValue(
+                ":start",
+                QtCore.QVariant(start_time.strftime("%Y-%m-%d %H:%M")))
+            query.bindValue(
+                ":stop",
+                QtCore.QVariant(stop_time.strftime("%Y-%m-%d %H:%M")))
+            query.bindValue(":title", title)
+            query.bindValue(":duration", duration)
+            query.bindValue(":channel", channel)
+            query.exec_()
 
     def setup_widgets(self):
         hbox = QtGui.QHBoxLayout()
