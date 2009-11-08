@@ -33,11 +33,13 @@ class TVGuide(QtGui.QMainWindow):
         self._tv_xml = None
         self._pretty_channels = {}
         self.setup_models()
-        self.setup_schedule_panel_widgets()
         self.setup_widgets()
         self._populate_channel_list()
 
     def setup_models(self):
+        self.setup_schedule_database_model()
+
+    def setup_schedule_database_model(self):
         self._db = QtSql.QSqlDatabase("QSQLITE")
         self._db.setDatabaseName("minimatv.db")
         if not self._db.open():
@@ -56,8 +58,15 @@ class TVGuide(QtGui.QMainWindow):
         self._schedule_model.setHeaderData(2, QtCore.Qt.Horizontal, "Duration")
         self._schedule_model.setHeaderData(3, QtCore.Qt.Horizontal, "Channel")
 
-    def _populate_schedule_database(self):
-        query = QtSql.QSqlQuery(self._db)
+    def _programmes_table_exists(self, query):
+        query.exec_("""\
+SELECT name FROM sqlite_master
+WHERE type = 'table' AND name = 'programmes'""")
+        exists = query.size() == 1
+        query.finish()
+        return exists
+
+    def _create_database(self, query):
         query.exec_("""\
 CREATE TABLE programmes (
 id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
@@ -67,12 +76,36 @@ title VARCHAR(200) NOT NULL,
 duration VARCHAR(6) NOT NULL,
 channel VARCHAR(40) NOT NULL)
 """)
+        query.finish()
+
+    def _populate_schedule_entry(self, query, start, stop, title, duration):
+        query.bindValue(
+            ":start",
+            QtCore.QVariant(start_time.strftime("%Y-%m-%d %H:%M")))
+        query.bindValue(
+            ":stop",
+            QtCore.QVariant(stop_time.strftime("%Y-%m-%d %H:%M")))
+        query.bindValue(":title", title)
+        query.bindValue(":duration", str(duration))
+        query.bindValue(":channel", channel)
+        query.exec_()
+        query.finish()
+
+    def _populate_schedule_database(self):
+        progress = QtGui.QProgressDialog(
+            "Updating schedule listings...", "Cancel", 0, 0, self)
+        progress.setModal(True)
+        progress.show()
+        query = QtSql.QSqlQuery(self._db)
+        if not self._programmes_table_exists(query):
+            self._create_database(query)
         query.prepare("""\
 INSERT INTO programmes (start, stop, title, duration, channel)
 VALUES (:start, :stop, :title, :duration, :channel)""")
         programmes = self.get_tv_xml().findall("programme")
         now = datetime.datetime.utcnow()
         for programme in programmes:
+            QtGui.QApplication.processEvents()
             title = programme.find("title").text
             channel = programme.get("channel")
             stop = programme.get("stop")
@@ -82,16 +115,8 @@ VALUES (:start, :stop, :title, :duration, :channel)""")
             start = programme.get("start")
             start_time = self._utc_from_timestamp(start)
             duration = stop_time - start_time
-            query.bindValue(
-                ":start",
-                QtCore.QVariant(start_time.strftime("%Y-%m-%d %H:%M")))
-            query.bindValue(
-                ":stop",
-                QtCore.QVariant(stop_time.strftime("%Y-%m-%d %H:%M")))
-            query.bindValue(":title", title)
-            query.bindValue(":duration", str(duration))
-            query.bindValue(":channel", channel)
-            query.exec_()
+            self._populate_schedule_entry(query, start, stop, title, duration)
+        progress.hide()
 
     def setup_schedule_panel_widgets(self):
         self._schedule_table = QtGui.QTableView()
@@ -119,7 +144,14 @@ VALUES (:start, :stop, :title, :duration, :channel)""")
         self._schedule_splitter.addWidget(self._schedule_table)
         self._schedule_splitter.addWidget(schedule_details_group)
 
+    def setup_menu_bar(self):
+        tools_menu = self.menuBar().addMenu("&Tools")
+        update_action = tools_menu.addAction("Update")
+        update_action.triggered.connect(self._populate_schedule_database)
+
     def setup_widgets(self):
+        self.setup_schedule_panel_widgets()
+        self.setup_menu_bar()
         # TODO - split this up
         hbox = QtGui.QHBoxLayout()
         splitter = QtGui.QSplitter(QtCore.Qt.Horizontal)
