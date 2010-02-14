@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright 2009  Carlos Corbacho <carlos@strangeworlds.co.uk>
+# Copyright 2009-2010  Carlos Corbacho <carlos@strangeworlds.co.uk>
 
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,6 +21,10 @@ import time
 
 import lxml.etree
 
+import sip
+sip.setapi("QString", 2)
+sip.setapi("QVariant", 2)
+
 from PyQt4 import QtCore
 from PyQt4 import QtGui
 from PyQt4 import QtSql
@@ -37,15 +41,18 @@ class TVGuide(QtGui.QMainWindow):
         self._populate_channel_list()
 
     def setup_models(self):
+        self.connect_to_database()
         self.setup_schedule_database_model()
 
-    def setup_schedule_database_model(self):
+    def connect_to_database(self):
         self._db = QtSql.QSqlDatabase("QSQLITE")
         self._db.setDatabaseName("minimatv.db")
         if not self._db.open():
             # TODO - better exception for failing to open database
             print self._db.lastError().text()
             sys.exit(1)
+
+    def setup_schedule_database_model(self):
 #        self._populate_schedule_database() # TODO - don't call this on startup
         self._schedule_model = QtSql.QSqlTableModel(self, self._db)
         self._schedule_model.setTable("programmes")
@@ -78,18 +85,17 @@ channel VARCHAR(40) NOT NULL)
 """)
         query.finish()
 
-    def _populate_schedule_entry(self, query, start, stop, title, duration):
+    def _populate_schedule_entry(self, query, start, stop, title, duration, channel):
         query.bindValue(
             ":start",
-            QtCore.QVariant(start_time.strftime("%Y-%m-%d %H:%M")))
+            start)
         query.bindValue(
             ":stop",
-            QtCore.QVariant(stop_time.strftime("%Y-%m-%d %H:%M")))
+            stop.strftime("%Y-%m-%d %H:%M"))
         query.bindValue(":title", title)
         query.bindValue(":duration", str(duration))
         query.bindValue(":channel", channel)
         query.exec_()
-        query.finish()
 
     def _populate_schedule_database(self):
         progress = QtGui.QProgressDialog(
@@ -115,7 +121,12 @@ VALUES (:start, :stop, :title, :duration, :channel)""")
             start = programme.get("start")
             start_time = self._utc_from_timestamp(start)
             duration = stop_time - start_time
-            self._populate_schedule_entry(query, start, stop, title, duration)
+            self._populate_schedule_entry(
+                query, start_time, stop_time, title, duration, channel)
+        query.finish()
+        # TODO - hammer to crack a nut. Is this really necessary?
+        self.setup_schedule_database_model()
+        self._schedule_table.setModel(self._schedule_model)
         progress.hide()
 
     def setup_schedule_panel_widgets(self):
